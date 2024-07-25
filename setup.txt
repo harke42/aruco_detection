@@ -1,0 +1,15 @@
+Setup:
+apt install python3-venv
+python3 -m venv ./virtualenv/myenv --system-site-packages
+source ~/.virtualenv/myenv/bin/activate
+("deactivate" alone in cmd to leave)
+pip install opencv-contrib-python
+pip install numpy==1.26.4
+apt install libgl1
+apt install python3-picamera2
+apt install libcap-dev
+apt install python3-dev
+apt install python3-libcamera
+apt install python3-kms++
+pip install PyYAML
+pip install flask
