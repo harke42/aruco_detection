@@ -3,6 +3,7 @@ apt install python3-venv
 python3 -m venv ./virtualenv/myenv --system-site-packages
 source ~/.virtualenv/myenv/bin/activate
 ("deactivate" alone in cmd to leave)
+(in fish use ". ./virtualenv/myenv/bin/activate.fish")
 pip install opencv-contrib-python
 pip install numpy==1.26.4
 apt install libgl1

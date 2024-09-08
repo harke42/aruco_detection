@@ -19,6 +19,7 @@ from utils.ip import get_ip_address
 
 V3_CALIB_PATH = './calibrations/calibration_v3_chess.yaml'
 V2_CALIB_PATH = './calibrations/calibration_v2_chess.yaml'
+V1_CALIB_PATH = './calibrations/calibration_v1_chess.yaml'
 
 
 class ArucoDetector:
@@ -35,6 +36,7 @@ class ArucoDetector:
     picam_config:       picamera2.configuration
     orig_frame:         np.array
     out_frame:          bytes
+    stream_if:          str
 
     cam_matrix:         np.array
     cam_dist_matrix:    np.array
@@ -49,7 +51,7 @@ class ArucoDetector:
     map1: np.array
     map2: np.array
 
-    def __init__(self, version="v2", calibrate=False):
+    def __init__(self, version="v2", stream_if="wlan0", calibrate=False):
 
         # init program parameters
         self.calibrate = calibrate
@@ -65,13 +67,16 @@ class ArucoDetector:
         self.picam = picamera2.Picamera2()
         if version == "v2":
             self.picam_config = self.picam.create_video_configuration(raw={"size": (1640, 1232)}, main={"format": "RGB888", "size": (640, 480)}, buffer_count=5)
-        else:
+        elif version == "v3":
             self.picam_config = self.picam.create_video_configuration(raw={"size": (2304, 1296)}, main={"format": "RGB888", "size": (1280, 720)}, buffer_count=5)
+        elif version == "v1":
+            self.picam_config = self.picam.create_video_configuration(raw={"size": (2592, 1944)}, main={"format": "RGB888", "size": (640, 480)}, buffer_count=5)
 
         self.picam.configure(self.picam_config)
         self.picam.start()
         self.orig_frame = None
         self.out_frame = None
+        self.stream_if = stream_if
         time.sleep(2.0)
 
         # init camera calibration parameters, if new calibration not needed
@@ -91,6 +96,8 @@ class ArucoDetector:
                 calib_path = V2_CALIB_PATH
             elif self.version == "v3":
                 calib_path = V3_CALIB_PATH
+            elif self.version == "v1":
+                calib_path = V1_CALIB_PATH
 
         # Calibration
         loadeddict = None
@@ -124,7 +131,7 @@ class ArucoDetector:
     # web stream of current image to host_ip:5000
     def __flask(self):
         app = Flask(__name__)
-        ip = get_ip_address("wlan0")
+        ip = get_ip_address(self.stream_if)
 
         def send_frames():
             while True:
@@ -179,7 +186,8 @@ class ArucoDetector:
             if marker_ids is not [] and marker_ids is not None:
                 frame_out = arc.drawDetectedMarkers(frame_cpy, marker_corners, marker_ids)
             else:
-                print("No markers found (Vis)", file=sys.stderr)
+                if not self.calibrate:
+                    print("No markers found (Vis)", file=sys.stderr)
             ret, buffer = cv2.imencode('.jpg', frame_out)
             self.out_frame = buffer.tobytes()
             time.sleep(0.1)
@@ -189,7 +197,7 @@ class ArucoDetector:
         msr_cnt = 0
         print("time; dist_trans; dist_rot; undist_trans; undist_rot")
         while True:
-            print("Enter for Measurement", file=sys.stderr)
+            print("Input message to name measurement, press enter to measure", file=sys.stderr)
             msg = input()
             print("measurement",  msr_cnt, msg)
             msr_cnt += 1
@@ -238,7 +246,7 @@ class ArucoDetector:
 
 if __name__ == '__main__':
     #select Version from ["v2", "v3"]
-    arc_detector = ArucoDetector(version="v3")
+    arc_detector = ArucoDetector(version="v1", stream_if="usb0")
     arc_detector.start()
 
 """
