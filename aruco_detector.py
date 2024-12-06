@@ -14,17 +14,19 @@ import numpy as np
 import picamera2
 
 # local imports
-import utils.chess_calibration as calibration
-from utils.ip import get_ip_address
+import aruco_detection.utils.chess_calibration as calibration
+from aruco_detection.utils.ip import get_ip_address
 
-V3_CALIB_PATH = './calibrations/calibration_v3_chess.yaml'
-V2_CALIB_PATH = './calibrations/calibration_v2_chess.yaml'
-V1_CALIB_PATH = './calibrations/calibration_v1_chess.yaml'
+V3_CALIB_PATH = './aruco_detection/calibrations/calibration_v3_chess.yaml'
+V2_CALIB_PATH = './aruco_detection/calibrations/calibration_v2_chess.yaml'
+V1_CALIB_PATH = './aruco_detection/calibrations/calibration_v1_chess.yaml'
 
 
 class ArucoDetector:
 
     calibrate:          bool
+    streaming:          bool
+    auto_measurements:  bool
     version:            str
 
     dictionary:         arc.Dictionary
@@ -51,10 +53,12 @@ class ArucoDetector:
     map1: np.array
     map2: np.array
 
-    def __init__(self, version="v2", stream_if="wlan0", calibrate=False):
+    def __init__(self, version="v3", stream_if="wlan0", calibrate=False, streaming=False, auto_measurements=False):
 
         # init program parameters
         self.calibrate = calibrate
+        self.streaming = streaming
+        self.auto_measurements = auto_measurements
         self.version = version
 
         # init Aruco Foo
@@ -122,11 +126,13 @@ class ArucoDetector:
     # start Aruco Detector; if calibrate: start calibration
     def start(self):
         self.collect_img_task.start()
-        self.flask_task.start()
+        if self.streaming:
+            self.flask_task.start()
         if self.calibrate:
             self.calibration_task.start()
             self.calibration_task.join()
-        self.measurement_task.start()
+        if self.auto_measurements:
+            self.measurement_task.start()
 
     # web stream of current image to host_ip:5000
     def __flask(self):
@@ -192,8 +198,32 @@ class ArucoDetector:
             self.out_frame = buffer.tobytes()
             time.sleep(0.1)
 
+    def get_out_frame(self):
+        return self.out_frame
+
+    def measurement(self):
+        """measure translation and rotation of all visible aruco markers;
+            return: list of marker IDs, list of translation vecs, list of rotation vecs"""
+        if self.orig_frame is not None:
+            dist_rotation_vec = []
+            dist_translation_vec = []
+
+            #distorted image analysis
+            marker_corners, marker_ids, rejected_candidates = self.detector.detectMarkers(self.orig_frame)
+            if marker_ids is not [] and marker_ids is not None:
+                dist_rotation_vec, dist_translation_vec, objpts = cv2.aruco.estimatePoseSingleMarkers(marker_corners, 0.08,
+                                                                                            self.cam_matrix,
+                                                                                            self.cam_dist_coeff)
+                distance = np.sqrt(dist_translation_vec[0][0][0] ** 2 + dist_translation_vec[0][0][1] ** 2 + dist_translation_vec[0][0][2] ** 2)
+
+
+            return marker_ids, dist_translation_vec, dist_rotation_vec
+        else:
+            return [], [], []
+            
     # measure translation and rotation of current image
     def __measurements(self):
+        """measure distorted and undistorted translation and rotation of current image and print to stdout; values only for one visible marker"""
         msr_cnt = 0
         print("time; dist_trans; dist_rot; undist_trans; undist_rot")
         while True:
