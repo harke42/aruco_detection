@@ -21,37 +21,53 @@ V3_CALIB_PATH = './aruco_detection/calibrations/calibration_v3_chess.yaml'
 V2_CALIB_PATH = './aruco_detection/calibrations/calibration_v2_chess.yaml'
 V1_CALIB_PATH = './aruco_detection/calibrations/calibration_v1_chess.yaml'
 
+MARKER_SIZE = 0.08
+
 
 class ArucoDetector:
 
     calibrate:          bool
+    '''Calibration Routine on Start'''
     streaming:          bool
+    '''Stream Video Feed of Robot to Flask Server'''
     auto_measurements:  bool
+    '''Repetetivly capture Pictures in Thread'''
     version:            str
+    '''Version of Camera Module'''
 
     dictionary:         arc.Dictionary
-    board:              arc.GridBoard
-    detector_params:    arc.DetectorParameters
+    '''Dictionary of Aruco Markers'''
     detector:           arc.ArucoDetector
-
+    '''cv2.aruco.ArucoDetector Object'''
+    detector_params:    arc.DetectorParameters
+    '''Configuration Parameters for cv2.aruco.ArucoDetector'''
+    
     picam:              picamera2.Picamera2
+    '''Picamera2 Object'''
     picam_config:       picamera2.configuration
+    '''Configuration Parameters for Picamera2 Object'''
+    
     orig_frame:         np.array
+    '''Original Frame captured by picam'''
     out_frame:          bytes
+    '''Output Frame for Streaming with highlighted Aruco Markers'''
     stream_if:          str
+    '''Interface for Output Frame Streaming'''
 
     cam_matrix:         np.array
-    cam_dist_matrix:    np.array
+    '''Camera Configuration Matrix'''
     cam_dist_coeff:     np.array
-    cam_roi:            np.array
+    '''Camera Distortion Coefficient'''
 
     collect_img_task:   threading.Thread
+    '''Thread for Capturing Images (activated by self.auto_measurements)'''
     measurement_task:   threading.Thread
+    '''Thread for automated Image Analysiss (activated by self.auto_measurements)'''
     calibration_task:   threading.Thread
+    '''Thread for generating a Calibration before start (activated by self.calibrate)'''
     flask_task:         threading.Thread
+    '''Thread for Flask Server to stream Output Frame (activated by self.streaming)'''
 
-    map1: np.array
-    map2: np.array
 
     def __init__(self, version="v3", stream_if="wlan0", calibrate=False, streaming=False, auto_measurements=False):
 
@@ -61,9 +77,8 @@ class ArucoDetector:
         self.auto_measurements = auto_measurements
         self.version = version
 
-        # init Aruco Foo
+        # init Aruco
         self.dictionary = arc.getPredefinedDictionary(arc.DICT_6X6_250)
-        self.board = arc.GridBoard((2, 3), 0.075, 0.01, self.dictionary)
         self.detector_params = arc.DetectorParameters()
         self.detector = arc.ArucoDetector(self.dictionary, self.detector_params)
 
@@ -83,7 +98,7 @@ class ArucoDetector:
         self.stream_if = stream_if
         time.sleep(2.0)
 
-        # init camera calibration parameters, if new calibration not needed
+        # init camera calibration parameters, if existing calibration shall be used
         if not calibrate:
             self.__init_calibration()
 
@@ -93,8 +108,9 @@ class ArucoDetector:
         self.calibration_task = threading.Thread(target=self.__generate_calib_data)
         self.flask_task = threading.Thread(target=self.__flask)
 
-    # init cv2 calibration parameters
+
     def __init_calibration(self, calib_path=""):
+        '''init cv2 camera calibration parameters'''
         if calib_path == "":
             if self.version == "v2":
                 calib_path = V2_CALIB_PATH
@@ -103,39 +119,36 @@ class ArucoDetector:
             elif self.version == "v1":
                 calib_path = V1_CALIB_PATH
 
-        # Calibration
+        # Load saved Parameters
         loadeddict = None
         with open(calib_path) as f:
             loadeddict = yaml.safe_load(f)
 
         mtx = loadeddict.get("camera_matrix")
         dist = loadeddict.get("dist_coeff")
-        img = self.picam.capture_array()
-        mtx = np.array(mtx)
-        dist = np.array(dist)
-        h, w = img.shape[:2]
-        self.cam_matrix = mtx
-        self.cam_dist_matrix, self.cam_roi = cv2.getOptimalNewCameraMatrix(mtx, dist, (w, h), 1, (w, h))
-        self.cam_dist_coeff = dist
-        #if version == "V3":  # not working at the moment
-        #    self.map1, self.map2 = cv2.fisheye.initUndistortRectifyMap(self.cam_matrix, self.cam_dist_coeff,
-        #                                                               np.array([[0, 0, 0], [0, 0, 0], [0, 0, 0]]),
-        #                                                               self.cam_dist_matrix, (w, h), cv2.CV_16SC2)
+        self.cam_matrix = np.array(mtx)
+        self.cam_dist_coeff = np.array(dist)
+        
         print("Successfully calibrated camera!", file=sys.stderr)
 
-    # start Aruco Detector; if calibrate: start calibration
+
     def start(self):
-        self.collect_img_task.start()
+        '''start Aruco Detector, activate configured features'''
+
+        # capture one frame to not start with empty frame
+        self.orig_frame = self.picam.capture_array()
         if self.streaming:
             self.flask_task.start()
         if self.calibrate:
             self.calibration_task.start()
             self.calibration_task.join()
         if self.auto_measurements:
+            self.collect_img_task.start()
             self.measurement_task.start()
 
-    # web stream of current image to host_ip:5000
+
     def __flask(self):
+        '''web stream of current output frame to stream_if:5000'''
         app = Flask(__name__)
         ip = get_ip_address(self.stream_if)
 
@@ -156,12 +169,19 @@ class ArucoDetector:
 
         app.run(debug=True, threaded=True, host=ip, use_reloader=False)
 
-    # function to capture calibration images and build a calibration
+
     def __generate_calib_data(self):
+        '''- function to capture calibration images and build a calibration
+           - when configured to, called before start
+           - saves calibration at ./calib_data/calibration_your_custom_input.yaml'''
         path = "./calib_data/"
+        
+        # create calib_data folder, if not exists
         pathlib.Path(path).mkdir(parents=True, exist_ok=True)
         count = 0
         time.sleep(3)
+
+        # Capture images as calibration data, repeat at least 20 times
         print("Started Data Generation, press Enter to Capture, write exit to continue with calibration build", file=sys.stderr)
         while True:
             if self.picam is not None:
@@ -181,49 +201,57 @@ class ArucoDetector:
         calib_path = calibration.main(filename=msg)
         self.__init_calibration(calib_path=calib_path)
 
-    # capture frame and analyze for video output
+
     def __get_frame(self):
+        '''capture frame and analyze for video output'''
         while True:
             self.orig_frame = self.picam.capture_array()
-            # normal detection
+            
+            # normal detection, work on frame copy to not mess with original frame
             frame_cpy = np.copy(self.orig_frame)
             marker_corners, marker_ids, rejected_candidates = self.detector.detectMarkers(self.orig_frame)
             frame_out = np.copy(self.orig_frame)
+            
             if marker_ids is not [] and marker_ids is not None:
+                # frame_cpy will be changed too, as drawDetectedMarkers(...) is originally a c++ function
                 frame_out = arc.drawDetectedMarkers(frame_cpy, marker_corners, marker_ids)
             else:
-                if not self.calibrate:
+                if not self.calibrate and self.auto_measurements:
                     print("No markers found (Vis)", file=sys.stderr)
             ret, buffer = cv2.imencode('.jpg', frame_out)
             self.out_frame = buffer.tobytes()
             time.sleep(0.1)
 
+
     def get_out_frame(self):
         return self.out_frame
 
-    def measurement(self):
-        """measure translation and rotation of all visible aruco markers;
-            return: list of marker IDs, list of translation vecs, list of rotation vecs"""
-        if self.orig_frame is not None:
-            dist_rotation_vec = []
-            dist_translation_vec = []
 
-            #distorted image analysis
+    def measurement(self):
+        '''- measure translation and rotation of all visible aruco markers;
+            - return: list of marker IDs, list of translation vecs, list of rotation vecs'''
+        # capture frame
+        if not self.auto_measurements:
+            self.orig_frame = self.picam.capture_array()
+        
+        # image analysis
+        if self.orig_frame is not None:
             marker_corners, marker_ids, rejected_candidates = self.detector.detectMarkers(self.orig_frame)
+            
             if marker_ids is not [] and marker_ids is not None:
-                dist_rotation_vec, dist_translation_vec, objpts = cv2.aruco.estimatePoseSingleMarkers(marker_corners, 0.08,
+                rotation_vec, translation_vec, objpts = cv2.aruco.estimatePoseSingleMarkers(marker_corners, 
+                                                                                            MARKER_SIZE,
                                                                                             self.cam_matrix,
                                                                                             self.cam_dist_coeff)
-                distance = np.sqrt(dist_translation_vec[0][0][0] ** 2 + dist_translation_vec[0][0][1] ** 2 + dist_translation_vec[0][0][2] ** 2)
 
-
-            return marker_ids, dist_translation_vec, dist_rotation_vec
+            return marker_ids, translation_vec, rotation_vec
         else:
             return [], [], []
             
-    # measure translation and rotation of current image
+
     def __measurements(self):
-        """measure distorted and undistorted translation and rotation of current image and print to stdout; values only for one visible marker"""
+        '''- measure distorted and undistorted translation and rotation of current image and print to stdout 
+            - values only calculated for first visible marker'''
         msr_cnt = 0
         print("time; dist_trans; dist_rot; undist_trans; undist_rot")
         while True:
@@ -236,8 +264,6 @@ class ArucoDetector:
                 if self.orig_frame is not None:
                     dist_rotation_vec = []
                     dist_translation_vec = []
-                    undist_rotation_vec = []
-                    undist_translation_vec = []
 
                     #distorted image analysis
                     marker_corners, marker_ids, rejected_candidates = self.detector.detectMarkers(self.orig_frame)
@@ -252,24 +278,8 @@ class ArucoDetector:
                     else:
                         print(f"No markers found in distorted image, Measurement {msr_cnt}, Iteration {j}", file=sys.stderr)
 
-                    #undistorted image analysis
-                    img_gray = cv2.cvtColor(self.orig_frame, cv2.COLOR_BGR2GRAY)
-                    img_undist = cv2.undistort(img_gray, self.cam_matrix, self.cam_dist_coeff, None, self.cam_dist_matrix)
-                    marker_corners, marker_ids, rejected_candidates = self.detector.detectMarkers(img_undist)
-                    if marker_ids is not [] and marker_ids is not None:
-                        undist_rotation_vec, undist_translation_vec, objpts = cv2.aruco.estimatePoseSingleMarkers(marker_corners, 0.08,
-                                                                                                    self.cam_dist_matrix,
-                                                                                                    self.cam_dist_coeff)
-                        distance = np.sqrt(undist_translation_vec[0][0][0] ** 2 + undist_translation_vec[0][0][1] ** 2 + undist_translation_vec[0][0][2] ** 2)
-                        print("Undistorted Distance:", distance, file=sys.stderr)
-                    else:
-                        print(f"No markers found in undistorted image, Measurement {msr_cnt}, Iteration {j}", file=sys.stderr)
-
-
-
                     current_time = datetime.datetime.now()
-                    print(current_time, ";", dist_translation_vec, ";", dist_rotation_vec, ";", undist_translation_vec,
-                          ";", undist_rotation_vec)
+                    print(current_time, ";", dist_translation_vec, ";", dist_rotation_vec)
                     time.sleep(0.3)
             print("Measurement written!", file=sys.stderr)
 
@@ -278,15 +288,3 @@ if __name__ == '__main__':
     #select Version from ["v2", "v3"]
     arc_detector = ArucoDetector(version="v1", stream_if="usb0")
     arc_detector.start()
-
-"""
-#    print(distance, file=sys.stderr)
-                        #for marker_id, marker_corner, i in zip(marker_ids, marker_corners, total_markers):
-                        #    #obj_points, img_points = self.board.matchImagePoints(marker_corner, marker_id)
-                        #    #ret, rotation_vec, translation_vec = cv2.solvePnP(obj_points, img_points, self.cam_dist_matrix, self.cam_dist_coeff)
-                        #    #deprecated
-                        #    rotation_vec, translation_vec, objpts = cv2.aruco.estimatePoseSingleMarkers(marker_corner, 0.08, self.cam_dist_matrix, self.cam_dist_coeff)
-
-                        #    distance = np.sqrt(translation_vec[0][0][0] ** 2 + translation_vec[0][0][1] ** 2 + translation_vec[0][0][2] ** 2)
-                        #    print(distance, file=sys.stderr)
-"""
